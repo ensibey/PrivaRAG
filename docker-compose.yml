@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  rag-app:
+    build: .
+    container_name: local-rag-app
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persist ChromaDB and uploaded docs between container restarts
+      - ./chroma_db:/app/chroma_db
+      - ./uploaded_docs:/app/uploaded_docs
+    environment:
+      # Ollama runs on the HOST machine — Docker reaches it via this URL
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+    extra_hosts:
+      # Required on Linux hosts so host.docker.internal resolves correctly
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
