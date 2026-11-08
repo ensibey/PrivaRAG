@@ -1,12 +1,15 @@
-# config.py — Central configuration for the Local RAG System
+# config.py — Central configuration for PrivaRAG (Privacy-Centric Enterprise RAG)
 
 # --- Ollama Models ---
 LLM_MODEL = "llama3"
 EMBEDDING_MODEL = "nomic-embed-text"
 
-# --- ChromaDB ---
+# --- Vector Stores (ChromaDB & Qdrant / Semantic Cache) ---
 CHROMA_PERSIST_DIR = "./chroma_db"
 CHROMA_COLLECTION_NAME = "local_rag_docs"
+SEMANTIC_CACHE_PATH = "./chroma_db/semantic_cache.json"
+SEMANTIC_CACHE_THRESHOLD = 0.88
+SEMANTIC_CACHE_TTL = 86400
 
 # --- Text Splitting ---
 CHUNK_SIZE = 800
