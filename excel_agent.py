@@ -1,10 +1,8 @@
-"""
-excel_agent.py — Natural language analysis of Excel/CSV files via Pandas.
+"""Spreadsheet analysis agent backed by Pandas and local Ollama."""
+from __future__ import annotations
 
-Uses LangChain's PandasDataFrameAgent powered by local Ollama llama3.
-The agent can compute sums, averages, filters, and comparisons directly
-on the DataFrame without needing a vector database.
-"""
+from pathlib import Path
+from typing import Dict, List, Optional
 
 import pandas as pd
 from langchain_experimental.agents import create_pandas_dataframe_agent
@@ -13,39 +11,33 @@ from langchain_ollama import ChatOllama
 from config import LLM_MODEL, OLLAMA_BASE_URL
 
 
-def load_dataframe(file_path: str, sheet_name: str | None = None) -> pd.DataFrame:
-    """Load an Excel or CSV file into a Pandas DataFrame."""
-    import re
-    from pathlib import Path
-
+def load_dataframe(file_path: str, sheet_name: Optional[str] = None) -> pd.DataFrame:
+    """Load an Excel or CSV file into a cleaned Pandas DataFrame."""
     ext = Path(file_path).suffix.lower()
     if ext == ".csv":
         df = pd.read_csv(file_path)
     elif ext in (".xlsx", ".xls"):
         df = pd.read_excel(file_path, sheet_name=sheet_name or 0)
     else:
-        raise ValueError(f"Unsupported format: {ext}. Use .xlsx, .xls, or .csv")
+        raise ValueError(f"Unsupported format: {ext}. Expected .xlsx, .xls, or .csv")
 
-    df = df.dropna(how="all").dropna(axis=1, how="all")
-    return df
+    return df.dropna(how="all").dropna(axis=1, how="all")
 
 
-def get_sheet_names(file_path: str) -> list[str]:
-    """Return sheet names for Excel files, or ['CSV'] for CSV."""
-    from pathlib import Path
+def get_sheet_names(file_path: str) -> List[str]:
+    """Return sheet names for Excel workbooks or ['CSV'] for CSV files."""
     if Path(file_path).suffix.lower() == ".csv":
         return ["CSV"]
     xls = pd.ExcelFile(file_path)
-    return xls.sheet_names
+    return list(xls.sheet_names)
 
 
-def query_excel(file_path: str, question: str, sheet_name: str | None = None) -> dict:
-    """
-    Ask a natural-language question about an Excel/CSV file.
-
-    Returns:
-        {"answer": str, "dataframe_info": str}
-    """
+def query_excel(
+    file_path: str,
+    question: str,
+    sheet_name: Optional[str] = None,
+) -> Dict[str, str]:
+    """Execute a natural-language analytical query over a spreadsheet."""
     df = load_dataframe(file_path, sheet_name)
 
     llm = ChatOllama(
@@ -64,29 +56,21 @@ def query_excel(file_path: str, question: str, sheet_name: str | None = None) ->
 
     answer = agent.invoke({"input": question})
     answer_text = answer.get("output", str(answer))
-
-    # Build a quick summary of the DataFrame for context display
-    info_lines = [
-        f"Rows: {len(df):,}",
-        f"Columns: {', '.join(df.columns.tolist())}",
-    ]
+    info = f"Rows: {len(df):,} | Columns: {', '.join(str(c) for c in df.columns)}"
 
     return {
         "answer": answer_text,
-        "dataframe_info": " | ".join(info_lines),
+        "dataframe_info": info,
     }
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 3:
         print("Usage: python excel_agent.py <file.xlsx> <question>")
         sys.exit(1)
 
-    result = query_excel(sys.argv[1], " ".join(sys.argv[2:]))
-    print(f"\nAnswer: {result['answer']}")
-    print(f"File info: {result['dataframe_info']}")
+    res = query_excel(sys.argv[1], " ".join(sys.argv[2:]))
+    print(f"Answer: {res['answer']}")
+    print(f"Schema: {res['dataframe_info']}")

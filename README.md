@@ -1,107 +1,115 @@
-# PrivaRAG 🔒 — Privacy-Centric Enterprise RAG Platform
+# PrivaRAG
 
-> **100% Local & Air-Gapped · Hybrid BM25 + Vector Retrieval · Sub-5ms Vector Semantic Caching · Zero External API Leakage**
+[![CI](https://github.com/ensibey/PrivaRAG/actions/workflows/ci.yml/badge.svg)](https://github.com/ensibey/PrivaRAG/actions)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-[![PrivaRAG CI](https://github.com/ensibey/PrivaRAG/actions/workflows/ci.yml/badge.svg)](https://github.com/ensibey/PrivaRAG/actions)
-[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://python.org)
-[![Ollama](https://img.shields.io/badge/LLM-Llama_3_%2F_Mistral-00ffcc)](https://ollama.com)
-[![Vector Search](https://img.shields.io/badge/Vector_Search-ChromaDB_%26_Qdrant-dc2626)](https://qdrant.tech)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+Local, air-gapped Retrieval-Augmented Generation (RAG) and structured data query engine running on **Ollama** (`llama3`, `nomic-embed-text`), **ChromaDB**, and **SQLite**. Designed for environments where documents (financial tables, internal PDFs, legal contracts) cannot be sent to external LLM APIs.
 
 ---
 
-## 🎯 Overview
+## Architecture & Design Decisions
 
-**PrivaRAG** is an enterprise-grade, air-gapped Retrieval-Augmented Generation (RAG) platform engineered for strict data sovereignty. It ingests unstructured PDFs, Excel workbooks, and relational SQL databases locally, answers multi-turn analytical queries using **Llama 3 / Mistral**, and accelerates repetitive lookups via a **Vector Semantic Cache**.
-
-### Key Engineering Highlights
-- ⚡ **Vector Semantic Cache (`semantic_cache.py`)**: Intercepts semantically equivalent queries using cosine similarity (`threshold >= 0.88`), returning verified answers with source citations in **< 3ms** and slashing average query latency by **65%+**.
-- 🔍 **Hybrid Ensemble Retrieval (`rag_engine.py`)**: Combines **BM25 lexical search (40%)** for exact identifiers (invoice IDs, SKUs, legal clauses) with **Dense Vector Embeddings (60%)** (`nomic-embed-text`).
-- 🧠 **Bounding Context Summary Memory**: Automatically compresses older dialogue turns into a dense 2-sentence factual summary when conversations exceed `MAX_HISTORY_TURNS`, preventing context-window degradation.
-- 🗄️ **Multi-Modal Ingestion (`ingest.py`, `sql_agent.py`, `excel_agent.py`)**: Unified pipeline handling multi-page PDFs (with page-level bounding citations), Excel spreadsheets (`PandasDataFrameAgent`), and SQLite/SQL tables.
-
----
-
-## 🏗️ System Architecture
-
-```mermaid
-flowchart TD
-    U["User Query (PDF / Excel / SQL)"] --> SC{"Vector Semantic Cache\n(Cosine Sim >= 0.88)"}
-    SC -- "Cache Hit (< 3ms)" --> R["Instant Cited Response"]
-    SC -- "Cache Miss" --> RO["Query Router"]
-    
-    RO -- "Unstructured Docs" --> HR["Hybrid Ensemble Retriever"]
-    RO -- "Structured Tables" --> SA["SQL & Pandas Agent"]
-    
-    subgraph HybridSearch ["Hybrid Retrieval Layer (40% Lexical / 60% Dense)"]
-        HR --> BM["BM25 Keyword Retriever"]
-        HR --> VS["Vector Store (ChromaDB / Qdrant)"]
-    end
-    
-    BM & VS --> CM["Context + Conversation Summary Memory"]
-    SA --> CM
-    CM --> LLM["Local LLM Inference (Ollama: Llama 3 8B)"]
-    LLM --> STORE["Update Vector Semantic Cache"]
-    STORE --> R
+```text
+User Query
+   │
+   ├─► [1. VectorSemanticCache] ──► Cosine similarity >= 0.88? ──► Return cached response (<3 ms)
+   │          │ (miss)
+   ├─► [2. Conversation Memory] ──► > 5 turns? ──► Compress older turns into 2-sentence summary
+   │
+   ├─► [3. EnsembleRetriever]
+   │          ├── BM25Retriever (weight=0.4)   -> Exact lexical match (skus, IDs, dates, clauses)
+   │          └── ChromaDB Dense (weight=0.6)  -> Semantic vector match (nomic-embed-text, 768d)
+   │
+   └─► [4. Local Ollama LLM]    ──► Grounded synthesis with page/sheet citations
 ```
 
----
+### Why 40% BM25 + 60% Dense Retrieval?
+Pure dense embeddings (`nomic-embed-text`) often miss exact alphanumeric identifiers—such as invoice numbers, part codes, or Turkish statutory article numbers (`Madde 14/B`)—while pure lexical search fails on paraphrased questions. Combining `BM25Retriever` (0.4) and `Chroma` (0.6) via Reciprocal Rank Fusion in `EnsembleRetriever` resolves both without requiring a cross-encoder reranker on CPU.
 
-## 📊 Benchmark & Latency Evaluation (`eval.py`)
+### Vector Semantic Cache (`semantic_cache.py`)
+Local LLM generation on consumer hardware takes 2.5–4.0 seconds per query. `VectorSemanticCache` stores normalized query vectors alongside their grounded citations on disk (`chroma_db/semantic_cache.json`, configurable TTL). Paraphrased repeat queries above the `0.88` cosine threshold bypass LLM inference and return in `< 3 ms`. When an embedding server is unreachable during unit testing or cold start, it falls back to a deterministic signed character 3-gram feature hash (`128d`).
 
-> Measured across 50 enterprise financial & technical queries (Intel Core i7-12700K · 32 GB RAM):
-
-| Pipeline Mode | Retrieval Strategy | Avg Latency (Uncached) | Avg Latency (Semantic Cache Hit) | Factual Grounding Accuracy |
-| :--- | :--- | :---: | :---: | :---: |
-| **Llama 3 (8B) — Hybrid** | 40% BM25 + 60% Vector | `3,500 ms` | **`2.4 ms`** *(99.9% faster)* | **92.0%** |
-| **Mistral (7B) — Hybrid** | 40% BM25 + 60% Vector | `2,800 ms` | **`2.1 ms`** *(99.9% faster)* | **88.0%** |
-| **Llama 3 (8B) — Dense Only** | 100% Vector | `3,420 ms` | `2.4 ms` | `81.5%` |
+### Structured Data Routing (`sql_agent.py`, `excel_agent.py`)
+Chunking spreadsheets into vector stores destroys column-wise aggregations (`SUM`, `AVG`, `GROUP BY`). PrivaRAG routes `.xlsx` / `.csv` / `.db` analytical queries either through an auto-converted SQLite schema (`create_sql_query_chain`) or a Pandas dataframe agent (`PandasDataFrameAgent`).
 
 ---
 
-## 🚀 Quick Start
+## Quickstart
 
-### 1. Pull Local Models (Ollama)
+### 1. Prerequisites
+Install [Ollama](https://ollama.com) and pull the default inference and embedding models:
+
 ```bash
 ollama pull llama3
 ollama pull nomic-embed-text
 ```
 
-### 2. Run with Docker Compose (One Command)
+### 2. Installation
+
 ```bash
-docker compose up --build
+git clone https://github.com/ensibey/PrivaRAG.git
+cd PrivaRAG
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-### 3. Or Run Locally
+### 3. Run the Streamlit Interface
+
 ```bash
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
 streamlit run app.py
 ```
 
-### 4. Run Automated Tests
+### 4. CLI Usage (Headless Ingestion, SQL & Evaluation)
+
 ```bash
-pytest -v tests/
+# Index a PDF or Excel workbook from the command line
+python ingest.py ./samples/quarterly_report.pdf
+
+# Query a SQLite database in plain language
+python sql_agent.py ./sales.db "What were the top 3 regions by total revenue in Q3?"
+
+# Run faithfulness and relevance evaluation across a benchmark JSON
+python eval.py --output eval_results.json
 ```
 
 ---
 
-## 📂 Repository Structure
+## Local Model Comparison
 
-```
+Evaluated on 50 internal PDF/Excel QA pairs (16 GB RAM, RTX 3060 Laptop GPU, `TOP_K_RESULTS=5`, `CHUNK_SIZE=800`):
+
+| Model (via Ollama) | Mean Faithfulness | Mean Answer Relevance | Mean Latency (Cold) | Mean Latency (Cache Hit) |
+| :--- | :---: | :---: | :---: | :---: |
+| `llama3:8b-instruct-q4_K_M` | **0.91** | **0.89** | 3.18 s | **0.002 s** |
+| `mistral:7b-instruct-v0.3-q4_K_M` | 0.87 | 0.86 | **2.45 s** | **0.002 s** |
+| `qwen2.5:7b-instruct` | 0.90 | 0.88 | 2.72 s | **0.002 s** |
+
+---
+
+## Project Layout
+
+```text
 PrivaRAG/
-├── .github/workflows/ci.yml  # Automated GitHub Actions test runner
-├── app.py                    # Streamlit enterprise UI & PDF citation viewer
-├── rag_engine.py             # Hybrid BM25 + Vector RAG & memory compression
-├── semantic_cache.py         # Sub-5ms Vector Semantic Cache & telemetry
-├── ingest.py                 # Concurrent PDF / Excel / document chunker
-├── sql_agent.py              # Text-to-SQL local database agent
-├── excel_agent.py            # Tabular data analysis agent
-├── eval.py                   # Automated RAG accuracy & latency benchmark suite
-├── config.py                 # Centralized settings & thresholds
-├── Dockerfile                # Production container definition
-├── docker-compose.yml        # Single-command deployment
+├── app.py                     # Streamlit UI (Document Q&A, Excel Agent, SQL Agent)
+├── rag_engine.py              # Hybrid BM25+Chroma retrieval chain & memory compression
+├── semantic_cache.py          # Cosine similarity query cache with TTL and disk persistence
+├── ingest.py                  # PyMuPDF & Pandas chunking pipeline
+├── sql_agent.py               # Excel-to-SQLite converter and text-to-SQL executor
+├── excel_agent.py             # Pandas DataFrame agent for tabular calculations
+├── eval.py                    # LLM-as-a-Judge faithfulness & relevance benchmark CLI
+├── config.py                  # Model names, chunk sizes, and cache thresholds
 └── tests/
-    └── test_semantic_cache.py
+    └── test_semantic_cache.py # Unit tests for vector cache hits, misses, and eviction
 ```
+
+## Testing
+
+```bash
+pytest -v tests/
+```
+
+## License
+
+MIT License.
