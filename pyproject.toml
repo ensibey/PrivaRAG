@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "privarag"
+version = "0.2.0"
+description = "Air-gapped hybrid RAG (Okapi BM25 + dense vector RRF), semantic cache, PII redaction, and read-only SQLite/Excel agents"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Enis Doğan", email = "enis-dogan@outlook.com"}
+]
+keywords = ["rag", "hybrid-search", "bm25", "ollama", "chromadb", "privacy", "sqlite", "local-llm"]
+
+[project.urls]
+Homepage = "https://github.com/ensibey/PrivaRAG"
+Repository = "https://github.com/ensibey/PrivaRAG"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
