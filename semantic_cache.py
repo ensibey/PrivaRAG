@@ -173,6 +173,19 @@ class VectorSemanticCache:
         )
         self._save()
 
+    def invalidate_source(self, source_name: str) -> int:
+        """Remove all cached entries citing a modified/deleted source document."""
+        before = len(self._entries)
+        self._entries = [
+            entry
+            for entry in self._entries
+            if not any(src.get("source") == source_name for src in entry.sources)
+        ]
+        removed = before - len(self._entries)
+        if removed > 0:
+            self._save()
+        return removed
+
     def clear(self) -> None:
         """Clear all cached entries and reset telemetry."""
         self._entries.clear()

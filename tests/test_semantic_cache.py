@@ -57,3 +57,15 @@ def test_cache_persistence_and_clear():
 
         cache2.clear()
         assert cache2.stats()["entries"] == 0
+
+
+def test_cache_invalidate_source_removes_only_matching_entries():
+    cache = VectorSemanticCache(similarity_threshold=0.88)
+    cache.store("What is Q4 revenue?", "12.4M EUR", [{"source": "q4_report.pdf"}])
+    cache.store("What is remote work policy?", "3 days/week", [{"source": "hr_policy.pdf"}])
+
+    removed = cache.invalidate_source("q4_report.pdf")
+    assert removed == 1
+    assert cache.lookup("What is Q4 revenue?") is None
+    assert cache.lookup("What is remote work policy?") is not None
+
