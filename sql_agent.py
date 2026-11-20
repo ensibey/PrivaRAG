@@ -11,6 +11,7 @@ from langchain_community.utilities import SQLDatabase
 from langchain_ollama import ChatOllama
 
 from config import LLM_MODEL, OLLAMA_BASE_URL
+from sql_guard import validate_readonly_sql
 
 
 def excel_to_sqlite(excel_path: str, db_path: str) -> List[str]:
@@ -72,8 +73,17 @@ def query_sql(db_path: str, question: str) -> Dict[str, object]:
             if not line.startswith("```") and not line.lower().startswith("sql")
         ).strip()
 
+    validation = validate_readonly_sql(sql_query)
+    if not validation.is_safe:
+        return {
+            "sql_query": sql_query,
+            "raw_result": f"Security block: {validation.reason}",
+            "answer": f"Blocked unsafe SQL statement: {validation.reason}",
+            "tables": tables,
+        }
+
     try:
-        raw_result = db.run(sql_query)
+        raw_result = db.run(validation.normalized_sql)
     except Exception as exc:
         return {
             "sql_query": sql_query,
