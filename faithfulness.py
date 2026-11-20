@@ -17,7 +17,7 @@ STOPWORDS = {
     "bir", "ve", "ile", "için", "olan", "olarak", "daha", "gibi", "kadar", "bu",
 }
 
-NUMBER_RE = re.compile(r"\b\d+(?:[.,]\d+)?%?\b")
+NUMBER_RE = re.compile(r"(?<![0-9.])\d+(?:[.,]\d+)?%?")
 TOKEN_RE = re.compile(r"[0-9a-zA-ZçğıöşüÇĞİÖŞÜ]{3,}")
 CITATION_RE = re.compile(r"\[(\d+)\]")
 
@@ -41,7 +41,8 @@ def evaluate_faithfulness(
     context_tokens = {t for t in TOKEN_RE.findall(joined_context) if t not in STOPWORDS}
     context_numbers = set(NUMBER_RE.findall(joined_context))
 
-    ans_lower = (answer or "").lower()
+    ans_no_citations = CITATION_RE.sub("", answer or "")
+    ans_lower = ans_no_citations.lower()
     ans_tokens = [t for t in TOKEN_RE.findall(ans_lower) if t not in STOPWORDS]
     ans_numbers = NUMBER_RE.findall(ans_lower)
 
