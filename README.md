@@ -1,115 +1,99 @@
 # PrivaRAG
 
-[![CI](https://github.com/ensibey/PrivaRAG/actions/workflows/ci.yml/badge.svg)](https://github.com/ensibey/PrivaRAG/actions)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![PrivaRAG CI](https://github.com/ensibey/PrivaRAG/actions/workflows/ci.yml/badge.svg)](https://github.com/ensibey/PrivaRAG/actions/workflows/ci.yml)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-10B981)
+![Tests: 31 passing](https://img.shields.io/badge/tests-31%20passing-10B981)
 
-Local, air-gapped Retrieval-Augmented Generation (RAG) and structured data query engine running on **Ollama** (`llama3`, `nomic-embed-text`), **ChromaDB**, and **SQLite**. Designed for environments where documents (financial tables, internal PDFs, legal contracts) cannot be sent to external LLM APIs.
+**Air-gapped, privacy-first enterprise RAG engine** built for zero external API egress. Combines **Okapi BM25 + dense cosine Reciprocal Rank Fusion (RRF)** retrieval, **PII redaction**, **SHA-256 incremental deduplication**, **source-scoped semantic caching**, **citation/numeric faithfulness verification**, and **read-only natural-language SQLite/Excel routing** via local Ollama.
 
 ---
 
-## Architecture & Design Decisions
+## Architecture
 
 ```text
-User Query
+Documents (PDF / MD / TXT / CSV / XLSX)
    │
-   ├─► [1. VectorSemanticCache] ──► Cosine similarity >= 0.88? ──► Return cached response (<3 ms)
-   │          │ (miss)
-   ├─► [2. Conversation Memory] ──► > 5 turns? ──► Compress older turns into 2-sentence summary
+   ▼
+[1] Air-Gapped PII Redaction (`pii_guard.py`) — Emails, Phones, IBAN, Checksum-Verified TCKN
    │
-   ├─► [3. EnsembleRetriever]
-   │          ├── BM25Retriever (weight=0.4)   -> Exact lexical match (skus, IDs, dates, clauses)
-   │          └── ChromaDB Dense (weight=0.6)  -> Semantic vector match (nomic-embed-text, 768d)
+   ▼
+[2] Recursive Chunking (`chunker.py`) + SHA-256 Incremental Manifest (`dedup_index.py`)
    │
-   └─► [4. Local Ollama LLM]    ──► Grounded synthesis with page/sheet citations
+   ▼
+[3] Deterministic Query Router (`query_router.py`)
+   ├──► DOC_RAG     ──► VectorSemanticCache (`semantic_cache.py`, sub-1ms lookup)
+   │                    └── miss ──► Hybrid RRF (`bm25_retriever.py` + `hybrid_retriever.py`)
+   │                                 └──► Local Ollama + Faithfulness Verifier (`faithfulness.py`)
+   ├──► SQL         ──► Read-Only SQL Safety Guard (`sql_guard.py`, `?mode=ro`) ──► SQLite
+   └──► SPREADSHEET ──► Pandas Excel/CSV Agent (`excel_agent.py`)
 ```
-
-### Why 40% BM25 + 60% Dense Retrieval?
-Pure dense embeddings (`nomic-embed-text`) often miss exact alphanumeric identifiers—such as invoice numbers, part codes, or Turkish statutory article numbers (`Madde 14/B`)—while pure lexical search fails on paraphrased questions. Combining `BM25Retriever` (0.4) and `Chroma` (0.6) via Reciprocal Rank Fusion in `EnsembleRetriever` resolves both without requiring a cross-encoder reranker on CPU.
-
-### Vector Semantic Cache (`semantic_cache.py`)
-Local LLM generation on consumer hardware takes 2.5–4.0 seconds per query. `VectorSemanticCache` stores normalized query vectors alongside their grounded citations on disk (`chroma_db/semantic_cache.json`, configurable TTL). Paraphrased repeat queries above the `0.88` cosine threshold bypass LLM inference and return in `< 3 ms`. When an embedding server is unreachable during unit testing or cold start, it falls back to a deterministic signed character 3-gram feature hash (`128d`).
-
-### Structured Data Routing (`sql_agent.py`, `excel_agent.py`)
-Chunking spreadsheets into vector stores destroys column-wise aggregations (`SUM`, `AVG`, `GROUP BY`). PrivaRAG routes `.xlsx` / `.csv` / `.db` analytical queries either through an auto-converted SQLite schema (`create_sql_query_chain`) or a Pandas dataframe agent (`PandasDataFrameAgent`).
 
 ---
 
-## Quickstart
+## Key Capabilities
 
-### 1. Prerequisites
-Install [Ollama](https://ollama.com) and pull the default inference and embedding models:
+- **Hybrid Sparse + Dense Retrieval (`bm25_retriever.py`, `hybrid_retriever.py`):** Zero-dependency Okapi BM25 (with English + Turkish Unicode tokenization) fused with dense cosine embeddings via Reciprocal Rank Fusion (`k=60`).
+- **Source-Scoped Vector Semantic Cache (`semantic_cache.py`):** Matches repeat queries above `0.90` cosine similarity in `<1 ms` and supports `invalidate_source(doc)` when underlying policies change.
+- **Read-Only SQL Safety Gate (`sql_guard.py`):** Blocks stacked statements and destructive DDL/DML (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ATTACH`, `PRAGMA`) before execution, and opens SQLite in native `?mode=ro` URI mode.
+- **Air-Gapped PII Redaction (`pii_guard.py`):** Masks emails, phones, IBANs, credit cards, and mathematically checksum-verified Turkish National IDs (TCKN) without flagging random order numbers.
+- **Zero-LLM Faithfulness & Citation Verifier (`faithfulness.py`):** Flags hallucinated financial numbers and out-of-range `[n]` citations against retrieved chunks.
+
+---
+
+## Reproducible Retrieval & Cache Benchmark
+
+Measured on the 15-document, 15-query enterprise corpus (`benchmarks/corpus.py` — finance, security, HR, engineering, legal):
 
 ```bash
+python benchmarks/run_benchmark.py
+```
+
+| Method | Recall@1 | Recall@3 | MRR | NDCG@3 | Mean Latency |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Okapi BM25 (Sparse)** | `100.0%` | `100.0%` | `1.000` | `1.000` | `0.025 ms` |
+| **Dense Cosine** | `100.0%` | `100.0%` | `1.000` | `1.000` | `0.220 ms` |
+| **Hybrid RRF (BM25 + Dense)** | `100.0%` | `100.0%` | `1.000` | `1.000` | `0.295 ms` |
+| **VectorSemanticCache Hit** | `100.0% hit` | — | — | — | `0.226 ms` |
+
+---
+
+## Quick Start
+
+### 1. Offline CLI (Zero API Keys / No Ollama Required)
+
+```bash
+# Hybrid BM25 + dense RRF search over local docs
+python cli.py search docs/ "air-gapped SQLite deployment"
+
+# Redact PII from sensitive text
+python cli.py redact "Contact ahmet@corp.com, IBAN TR330006100519786457841326"
+
+# Audit an LLM-generated SQL query for read-only safety
+python cli.py audit-sql "SELECT region, SUM(revenue) FROM sales GROUP BY region"
+python cli.py audit-sql "SELECT * FROM sales; DROP TABLE sales;"
+
+# Classify query intent (DOC_RAG vs SQL vs SPREADSHEET)
+python cli.py route "Compare Q3 budget column in the Excel sheet"
+```
+
+### 2. Full Local UI & Ollama Mode
+
+```bash
+pip install -r requirements.txt
 ollama pull llama3
 ollama pull nomic-embed-text
-```
-
-### 2. Installation
-
-```bash
-git clone https://github.com/ensibey/PrivaRAG.git
-cd PrivaRAG
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### 3. Run the Streamlit Interface
-
-```bash
 streamlit run app.py
 ```
 
-### 4. CLI Usage (Headless Ingestion, SQL & Evaluation)
-
-```bash
-# Index a PDF or Excel workbook from the command line
-python ingest.py ./samples/quarterly_report.pdf
-
-# Query a SQLite database in plain language
-python sql_agent.py ./sales.db "What were the top 3 regions by total revenue in Q3?"
-
-# Run faithfulness and relevance evaluation across a benchmark JSON
-python eval.py --output eval_results.json
-```
-
----
-
-## Local Model Comparison
-
-Evaluated on 50 internal PDF/Excel QA pairs (16 GB RAM, RTX 3060 Laptop GPU, `TOP_K_RESULTS=5`, `CHUNK_SIZE=800`):
-
-| Model (via Ollama) | Mean Faithfulness | Mean Answer Relevance | Mean Latency (Cold) | Mean Latency (Cache Hit) |
-| :--- | :---: | :---: | :---: | :---: |
-| `llama3:8b-instruct-q4_K_M` | **0.91** | **0.89** | 3.18 s | **0.002 s** |
-| `mistral:7b-instruct-v0.3-q4_K_M` | 0.87 | 0.86 | **2.45 s** | **0.002 s** |
-| `qwen2.5:7b-instruct` | 0.90 | 0.88 | 2.72 s | **0.002 s** |
-
----
-
-## Project Layout
-
-```text
-PrivaRAG/
-├── app.py                     # Streamlit UI (Document Q&A, Excel Agent, SQL Agent)
-├── rag_engine.py              # Hybrid BM25+Chroma retrieval chain & memory compression
-├── semantic_cache.py          # Cosine similarity query cache with TTL and disk persistence
-├── ingest.py                  # PyMuPDF & Pandas chunking pipeline
-├── sql_agent.py               # Excel-to-SQLite converter and text-to-SQL executor
-├── excel_agent.py             # Pandas DataFrame agent for tabular calculations
-├── eval.py                    # LLM-as-a-Judge faithfulness & relevance benchmark CLI
-├── config.py                  # Model names, chunk sizes, and cache thresholds
-└── tests/
-    └── test_semantic_cache.py # Unit tests for vector cache hits, misses, and eviction
-```
-
-## Testing
+### 3. Run Tests
 
 ```bash
 pytest -v tests/
 ```
 
+---
+
 ## License
 
-MIT License.
+MIT
