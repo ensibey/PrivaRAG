@@ -13,10 +13,12 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
 EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{2}[\s.-]?\d{2}(?!\w)")
+PHONE_RE = re.compile(
+    r"(?<!\w)(?:\+\d{1,3}[\s.-]?\(?\d{3}\)?[\s.-]\d{3}[\s.-]?\d{2}[\s.-]?\d{2}|\(\d{3}\)[\s.-]?\d{3}[\s.-]\d{4}|\b0\d{3}[\s.-]\d{3}[\s.-]\d{2}[\s.-]\d{2})(?!\w)"
+)
 IBAN_RE = re.compile(r"\b[A-Z]{2}\d{2}(?:[\s-]?[0-9A-Z]{4}){3,6}(?:[\s-]?[0-9A-Z]{1,4})?\b")
 TCKN_RE = re.compile(r"\b[1-9]\d{10}\b")
-CARD_RE = re.compile(r"\b(?:\d{4}[\s-]?){3}\d{4}\b")
+CARD_RE = re.compile(r"\b(?:\d{4}[\s-]){3}\d{4}\b")
 
 
 def is_valid_tckn(candidate: str) -> bool:
